@@ -1,0 +1,30 @@
+@echo off
+setlocal
+
+if /I not "%~1"=="--elevated" (
+    fltmc >nul 2>&1
+    if errorlevel 1 (
+        echo Requesting administrator permission...
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c ""%~f0"" --elevated' -Verb RunAs"
+        exit /b
+    )
+)
+
+cd /d "%~dp0"
+
+echo Disabling Windows automatic updates from:
+echo %CD%
+echo.
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Disable-WindowsUpdates.ps1"
+set "SCRIPT_EXIT_CODE=%ERRORLEVEL%"
+
+echo.
+if not "%SCRIPT_EXIT_CODE%"=="0" (
+    echo Windows update disabling failed with exit code %SCRIPT_EXIT_CODE%.
+) else (
+    echo Windows automatic update disabling finished.
+)
+echo.
+pause
+exit /b %SCRIPT_EXIT_CODE%
