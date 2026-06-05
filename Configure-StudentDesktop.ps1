@@ -152,12 +152,18 @@ function Clear-RegistryValueNames {
         [string] $Description
     )
 
-    if (-not (Test-Path -Path $Path)) {
+    try {
+        if (-not (Test-Path -Path $Path)) {
+            return
+        }
+
+        $ValueNames = @((Get-Item -Path $Path -ErrorAction Stop).GetValueNames() |
+            Where-Object { -not [string]::IsNullOrEmpty($_) })
+    }
+    catch {
+        Write-Warning "Could not inspect $Description autostart registry path $Path. $($_.Exception.Message)"
         return
     }
-
-    $ValueNames = @((Get-Item -Path $Path -ErrorAction Stop).GetValueNames() |
-        Where-Object { -not [string]::IsNullOrEmpty($_) })
 
     foreach ($ValueName in $ValueNames) {
         try {
@@ -167,6 +173,29 @@ function Clear-RegistryValueNames {
         catch {
             Write-Warning "Could not remove $Description autostart value $ValueName. $($_.Exception.Message)"
         }
+    }
+}
+
+function Set-OptionalRegistryDWord {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $Name,
+
+        [Parameter(Mandatory)]
+        [int] $Value,
+
+        [Parameter(Mandatory)]
+        [string] $Description
+    )
+
+    try {
+        Set-RegistryDWord -Path $Path -Name $Name -Value $Value
+    }
+    catch {
+        Write-Warning "Could not set $Description registry value $Name at $Path. $($_.Exception.Message)"
     }
 }
 
@@ -208,40 +237,115 @@ function Set-StudentTaskbarAndDesktopRegistry {
         -ChildPath "Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
 
     # Windows 10 News and interests / Windows 11 Widgets.
-    Set-RegistryDWord -Path $FeedsPath -Name "ShellFeedsTaskbarViewMode" -Value 2
-    Set-RegistryDWord -Path $FeedsPolicyPath -Name "EnableFeeds" -Value 0
-    Set-RegistryDWord -Path $DshPolicyPath -Name "AllowNewsAndInterests" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "TaskbarDa" -Value 0
+    Set-OptionalRegistryDWord `
+        -Path $FeedsPath `
+        -Name "ShellFeedsTaskbarViewMode" `
+        -Value 2 `
+        -Description "Student taskbar widget"
+    Set-OptionalRegistryDWord `
+        -Path $FeedsPolicyPath `
+        -Name "EnableFeeds" `
+        -Value 0 `
+        -Description "Student taskbar widget policy"
+    Set-OptionalRegistryDWord `
+        -Path $DshPolicyPath `
+        -Name "AllowNewsAndInterests" `
+        -Value 0 `
+        -Description "Student taskbar widget policy"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "TaskbarDa" `
+        -Value 0 `
+        -Description "Student taskbar widget"
 
     # Remove default taskbar buttons so only running apps can appear.
-    Set-RegistryDWord -Path $SearchPath -Name "SearchboxTaskbarMode" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "ShowTaskViewButton" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "ShowCortanaButton" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "PeopleBand" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "TaskbarMn" -Value 0
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "ShowCopilotButton" -Value 0
-    Set-RegistryDWord -Path $ExplorerPolicyPath -Name "HideSCAMeetNow" -Value 1
-    Set-RegistryDWord -Path $CopilotPolicyPath -Name "TurnOffWindowsCopilot" -Value 1
+    Set-OptionalRegistryDWord `
+        -Path $SearchPath `
+        -Name "SearchboxTaskbarMode" `
+        -Value 0 `
+        -Description "Student taskbar search"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "ShowTaskViewButton" `
+        -Value 0 `
+        -Description "Student taskbar button"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "ShowCortanaButton" `
+        -Value 0 `
+        -Description "Student taskbar button"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "PeopleBand" `
+        -Value 0 `
+        -Description "Student taskbar button"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "TaskbarMn" `
+        -Value 0 `
+        -Description "Student taskbar button"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "ShowCopilotButton" `
+        -Value 0 `
+        -Description "Student taskbar button"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerPolicyPath `
+        -Name "HideSCAMeetNow" `
+        -Value 1 `
+        -Description "Student taskbar policy"
+    Set-OptionalRegistryDWord `
+        -Path $CopilotPolicyPath `
+        -Name "TurnOffWindowsCopilot" `
+        -Value 1 `
+        -Description "Student Copilot policy"
 
     # Remove and block pinned taskbar app shortcuts for this student.
-    Set-RegistryDWord -Path $ExplorerPolicyPath -Name "TaskbarNoPinnedList" -Value 1
-    Set-RegistryDWord -Path $ExplorerPolicyPath -Name "NoPinningToTaskbar" -Value 1
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerPolicyPath `
+        -Name "TaskbarNoPinnedList" `
+        -Value 1 `
+        -Description "Student taskbar pin policy"
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerPolicyPath `
+        -Name "NoPinningToTaskbar" `
+        -Value 1 `
+        -Description "Student taskbar pin policy"
 
-    if (Test-Path -Path $TaskbandPath) {
-        Remove-Item -Path $TaskbandPath -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Removed stored taskbar pin registry data" -ForegroundColor Green
+    try {
+        $TaskbandExists = Test-Path -Path $TaskbandPath
+    }
+    catch {
+        Write-Warning "Could not inspect stored taskbar pin registry data. $($_.Exception.Message)"
+        $TaskbandExists = $false
+    }
+
+    if ($TaskbandExists) {
+        try {
+            Remove-Item -Path $TaskbandPath -Recurse -Force -ErrorAction Stop
+            Write-Host "Removed stored taskbar pin registry data" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Could not remove stored taskbar pin registry data. $($_.Exception.Message)"
+        }
     }
 
     # Keep desktop icons visible and ensure Recycle Bin is shown.
-    Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "HideIcons" -Value 0
-    Set-RegistryDWord `
+    Set-OptionalRegistryDWord `
+        -Path $ExplorerAdvancedPath `
+        -Name "HideIcons" `
+        -Value 0 `
+        -Description "Student desktop icon"
+    Set-OptionalRegistryDWord `
         -Path $HideDesktopIconsPath `
         -Name "{645FF040-5081-101B-9F08-00AA002F954E}" `
-        -Value 0
-    Set-RegistryDWord `
+        -Value 0 `
+        -Description "Student Recycle Bin desktop icon"
+    Set-OptionalRegistryDWord `
         -Path $ClassicHideDesktopIconsPath `
         -Name "{645FF040-5081-101B-9F08-00AA002F954E}" `
-        -Value 0
+        -Value 0 `
+        -Description "Student Recycle Bin desktop icon"
 
     Write-Host "Configured Student taskbar, widget, and desktop icon registry settings" -ForegroundColor Green
 }
@@ -773,21 +877,42 @@ try {
 
     Set-MachineTaskbarPolicies
 
-    $HiveApplied = Invoke-WithStudentUserHive -StudentUser $StudentUser -Action {
-        param(
-            [string] $HiveRoot
-        )
+    try {
+        $HiveApplied = Invoke-WithStudentUserHive -StudentUser $StudentUser -Action {
+            param(
+                [string] $HiveRoot
+            )
 
-        Set-StudentTaskbarAndDesktopRegistry -HiveRoot $HiveRoot
-        Clear-StudentAutostartRegistry -HiveRoot $HiveRoot
+            try {
+                Set-StudentTaskbarAndDesktopRegistry -HiveRoot $HiveRoot
+            }
+            catch {
+                Write-Warning "Could not finish Student taskbar registry cleanup. $($_.Exception.Message)"
+            }
 
-        $script:StudentDesktopPaths = Get-StudentDesktopPaths `
-            -StudentProfilePath $StudentProfilePath `
-            -HiveRoot $HiveRoot
+            try {
+                Clear-StudentAutostartRegistry -HiveRoot $HiveRoot
+            }
+            catch {
+                Write-Warning "Could not finish Student autostart registry cleanup. $($_.Exception.Message)"
+            }
+
+            $script:StudentDesktopPaths = Get-StudentDesktopPaths `
+                -StudentProfilePath $StudentProfilePath `
+                -HiveRoot $HiveRoot
+        }
+    }
+    catch {
+        Write-Warning "Could not load or edit the Student registry hive. Continuing with file-based desktop cleanup. $($_.Exception.Message)"
+        $HiveApplied = $false
     }
 
     if (-not $HiveApplied) {
-        throw "Student profile is not ready yet. Log in once as $StudentUser, log out, then run this script again."
+        if (-not (Test-Path -LiteralPath $StudentProfilePath)) {
+            throw "Student profile is not ready yet. Log in once as $StudentUser, log out, then run this script again."
+        }
+
+        $script:StudentDesktopPaths = Get-StudentDesktopPaths -StudentProfilePath $StudentProfilePath
     }
 
     if ($script:StudentDesktopPaths.Count -eq 0) {
