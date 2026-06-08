@@ -1,5 +1,7 @@
 param(
     [string] $StudentUser = "Student",
+    [switch] $CleanPublicDesktop,
+    [switch] $CleanMachineAutostart,
     [switch] $SkipPublicDesktopCleanup,
     [switch] $SkipMachineAutostartCleanup,
     [switch] $SkipWallpaperTask
@@ -13,6 +15,15 @@ param(
 $ErrorActionPreference = "Stop"
 
 . "$PSScriptRoot\StudentAccountTools.ps1"
+
+function Get-NormalizedFullPath {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    return [IO.Path]::GetFullPath($Path).TrimEnd("\")
+}
 
 function ConvertTo-ExpandedStudentPath {
     param(
@@ -34,6 +45,50 @@ function ConvertTo-ExpandedStudentPath {
     }
 
     return [IO.Path]::GetFullPath($ExpandedPath)
+}
+
+function Test-PathUnderRoot {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
+
+    $NormalizedPath = Get-NormalizedFullPath -Path $Path
+    $NormalizedRoot = Get-NormalizedFullPath -Path $Root
+
+    return (
+        $NormalizedPath -ieq $NormalizedRoot -or
+        $NormalizedPath.StartsWith("$NormalizedRoot\", [StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Resolve-SafeStudentProfilePath {
+    param(
+        [Parameter(Mandatory)]
+        [string] $StudentUser
+    )
+
+    $ResolvedProfilePath = Get-StudentProfilePath -StudentUser $StudentUser
+    $CurrentProfilePath = [Environment]::GetFolderPath("UserProfile")
+    $FallbackProfilePath = "C:\Users\$StudentUser"
+
+    if (
+        $env:USERNAME -ine $StudentUser -and
+        $CurrentProfilePath -and
+        (Get-NormalizedFullPath -Path $ResolvedProfilePath) -ieq (Get-NormalizedFullPath -Path $CurrentProfilePath)
+    ) {
+        if (Test-Path -LiteralPath $FallbackProfilePath) {
+            Write-Warning "Windows reported $ResolvedProfilePath for $StudentUser, but that is the current admin profile. Using $FallbackProfilePath instead."
+            return $FallbackProfilePath
+        }
+
+        throw "Windows reported the current admin profile for $StudentUser. Log in once as $StudentUser so C:\Users\$StudentUser exists, then run this script again."
+    }
+
+    return $ResolvedProfilePath
 }
 
 function Add-UniquePath {
@@ -64,7 +119,9 @@ function Get-StudentDesktopPaths {
         [Parameter(Mandatory)]
         [string] $StudentProfilePath,
 
-        [string] $HiveRoot
+        [string] $HiveRoot,
+
+        [string] $CurrentProfilePath
     )
 
     $Paths = New-Object System.Collections.Generic.List[string]
@@ -82,11 +139,20 @@ function Get-StudentDesktopPaths {
                 $DesktopPath = $FolderKey.Desktop
 
                 if ($DesktopPath) {
-                    Add-UniquePath `
-                        -Paths $Paths `
-                        -Path (ConvertTo-ExpandedStudentPath `
-                            -Path $DesktopPath `
-                            -StudentProfilePath $StudentProfilePath)
+                    $ExpandedDesktopPath = ConvertTo-ExpandedStudentPath `
+                        -Path $DesktopPath `
+                        -StudentProfilePath $StudentProfilePath
+
+                    if (
+                        $CurrentProfilePath -and
+                        -not (Test-PathUnderRoot -Path $StudentProfilePath -Root $CurrentProfilePath) -and
+                        (Test-PathUnderRoot -Path $ExpandedDesktopPath -Root $CurrentProfilePath)
+                    ) {
+                        Write-Warning "Ignored desktop path because it points to current admin profile: $ExpandedDesktopPath"
+                        continue
+                    }
+
+                    Add-UniquePath -Paths $Paths -Path $ExpandedDesktopPath
                 }
             }
         }
@@ -262,12 +328,14 @@ function Set-StudentTaskbarAndDesktopRegistry {
         -Value 0 `
         -Description "Student taskbar widget"
 
-    # Remove default taskbar buttons so only running apps can appear.
+    # Keep Windows search visible for the Student account.
     Set-OptionalRegistryDWord `
         -Path $SearchPath `
         -Name "SearchboxTaskbarMode" `
-        -Value 0 `
+        -Value 2 `
         -Description "Student taskbar search"
+
+    # Remove optional taskbar buttons so only search, system tray, and running apps remain.
     Set-OptionalRegistryDWord `
         -Path $ExplorerAdvancedPath `
         -Name "ShowTaskViewButton" `
@@ -334,7 +402,7 @@ function Set-StudentTaskbarAndDesktopRegistry {
         }
     }
 
-    # Keep desktop icons visible and ensure Recycle Bin is shown.
+    # Keep desktop icons visible and ensure Recycle Bin / This PC are shown.
     Set-OptionalRegistryDWord `
         -Path $ExplorerAdvancedPath `
         -Name "HideIcons" `
@@ -350,6 +418,16 @@ function Set-StudentTaskbarAndDesktopRegistry {
         -Name "{645FF040-5081-101B-9F08-00AA002F954E}" `
         -Value 0 `
         -Description "Student Recycle Bin desktop icon"
+    Set-OptionalRegistryDWord `
+        -Path $HideDesktopIconsPath `
+        -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" `
+        -Value 0 `
+        -Description "Student This PC desktop icon"
+    Set-OptionalRegistryDWord `
+        -Path $ClassicHideDesktopIconsPath `
+        -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" `
+        -Value 0 `
+        -Description "Student This PC desktop icon"
 
     Write-Host "Configured Student taskbar, widget, and desktop icon registry settings" -ForegroundColor Green
 }
@@ -628,15 +706,65 @@ function New-DesktopShortcut {
         [string] $ShortcutPath,
 
         [Parameter(Mandatory)]
-        [string] $TargetPath
+        [string] $TargetPath,
+
+        [string] $Arguments,
+
+        [string] $WorkingDirectory,
+
+        [string] $IconLocation
     )
 
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = $TargetPath
-    $Shortcut.WorkingDirectory = Split-Path -Path $TargetPath -Parent
-    $Shortcut.IconLocation = $TargetPath
+
+    if ($Arguments) {
+        $Shortcut.Arguments = $Arguments
+    }
+
+    if ($WorkingDirectory) {
+        $Shortcut.WorkingDirectory = $WorkingDirectory
+    } else {
+        $Shortcut.WorkingDirectory = Split-Path -Path $TargetPath -Parent
+    }
+
+    if ($IconLocation) {
+        $Shortcut.IconLocation = $IconLocation
+    } else {
+        $Shortcut.IconLocation = $TargetPath
+    }
+
     $Shortcut.Save()
+}
+
+function Install-StudentSystemDesktopShortcuts {
+    param(
+        [Parameter(Mandatory)]
+        [string] $DesktopPath
+    )
+
+    $ThisPcShortcutPath = Join-Path -Path $DesktopPath -ChildPath "This PC.lnk"
+    $ExplorerPath = Join-Path -Path $env:WINDIR -ChildPath "explorer.exe"
+    $ThisPcIconPath = Join-Path -Path $env:WINDIR -ChildPath "System32\imageres.dll"
+
+    try {
+        if (Test-Path -LiteralPath $ThisPcShortcutPath) {
+            Remove-Item -LiteralPath $ThisPcShortcutPath -Force -ErrorAction Stop
+        }
+
+        New-DesktopShortcut `
+            -ShortcutPath $ThisPcShortcutPath `
+            -TargetPath $ExplorerPath `
+            -Arguments "shell:MyComputerFolder" `
+            -WorkingDirectory $env:WINDIR `
+            -IconLocation "$ThisPcIconPath,109"
+
+        Write-Host "Created desktop shortcut: $ThisPcShortcutPath" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Could not create This PC shortcut. $($_.Exception.Message)"
+    }
 }
 
 function Get-DesktopAppDefinitions {
@@ -743,6 +871,8 @@ function Install-DesktopAppShortcuts {
         throw "Could not create Student desktop directory $DesktopPath. $($_.Exception.Message)"
     }
 
+    Install-StudentSystemDesktopShortcuts -DesktopPath $DesktopPath
+
     foreach ($AppDefinition in (Get-DesktopAppDefinitions -StudentProfilePath $StudentProfilePath)) {
         try {
             $ShortcutPath = Join-Path `
@@ -801,10 +931,9 @@ function Clear-StartupFolders {
     $StudentStartupPath = Join-Path `
         -Path $StudentProfilePath `
         -ChildPath "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-    $CommonStartupPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
 
     Clear-DirectoryContents -Path $StudentStartupPath -Description "Student startup"
-    Clear-DirectoryContents -Path $CommonStartupPath -Description "common startup"
+    Write-Host "Skipping common startup cleanup because it affects all users." -ForegroundColor Yellow
 }
 
 function Install-RandomDefaultWallpaperTask {
@@ -822,6 +951,66 @@ function Install-RandomDefaultWallpaperTask {
 
     $WallpaperScript = @'
 $ErrorActionPreference = "SilentlyContinue"
+
+function Ensure-RegistryKey {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path -Path $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
+}
+
+function Set-RegistryDWord {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $Name,
+
+        [Parameter(Mandatory)]
+        [int] $Value
+    )
+
+    Ensure-RegistryKey -Path $Path
+
+    New-ItemProperty `
+        -Path $Path `
+        -Name $Name `
+        -Value $Value `
+        -PropertyType DWord `
+        -Force | Out-Null
+}
+
+$ExplorerAdvancedPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+$FeedsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds"
+$SearchPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search"
+$HideDesktopIconsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel"
+$ClassicHideDesktopIconsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu"
+
+Set-RegistryDWord -Path $FeedsPath -Name "ShellFeedsTaskbarViewMode" -Value 2
+Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "TaskbarDa" -Value 0
+Set-RegistryDWord -Path $SearchPath -Name "SearchboxTaskbarMode" -Value 2
+Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "HideIcons" -Value 0
+Set-RegistryDWord `
+    -Path $HideDesktopIconsPath `
+    -Name "{645FF040-5081-101B-9F08-00AA002F954E}" `
+    -Value 0
+Set-RegistryDWord `
+    -Path $ClassicHideDesktopIconsPath `
+    -Name "{645FF040-5081-101B-9F08-00AA002F954E}" `
+    -Value 0
+Set-RegistryDWord `
+    -Path $HideDesktopIconsPath `
+    -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" `
+    -Value 0
+Set-RegistryDWord `
+    -Path $ClassicHideDesktopIconsPath `
+    -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" `
+    -Value 0
 
 $WallpaperRoots = @(
     (Join-Path -Path $env:WINDIR -ChildPath "Web\Wallpaper"),
@@ -890,38 +1079,53 @@ try {
 
     $Student = Get-LocalUser -Name $StudentUser -ErrorAction Stop
     $StudentSid = $Student.SID.Value
-    $StudentProfilePath = Get-StudentProfilePath -StudentUser $StudentUser
+    $CurrentProfilePath = [Environment]::GetFolderPath("UserProfile")
+    $RegistryStudentProfilePath = Get-StudentProfilePath -StudentUser $StudentUser
+    $StudentProfilePath = Resolve-SafeStudentProfilePath -StudentUser $StudentUser
+    $CanUseStudentHive = (
+        (Get-NormalizedFullPath -Path $RegistryStudentProfilePath) -ieq
+        (Get-NormalizedFullPath -Path $StudentProfilePath)
+    )
     $script:StudentDesktopPaths = @()
+
+    Write-Host "Using Student profile path: $StudentProfilePath" -ForegroundColor Cyan
 
     Set-MachineTaskbarPolicies
 
-    try {
-        $HiveApplied = Invoke-WithStudentUserHive -StudentUser $StudentUser -Action {
-            param(
-                [string] $HiveRoot
-            )
+    if ($CanUseStudentHive) {
+        try {
+            $HiveApplied = Invoke-WithStudentUserHive -StudentUser $StudentUser -Action {
+                param(
+                    [string] $HiveRoot
+                )
 
-            try {
-                Set-StudentTaskbarAndDesktopRegistry -HiveRoot $HiveRoot
-            }
-            catch {
-                Write-Warning "Could not finish Student taskbar registry cleanup. $($_.Exception.Message)"
-            }
+                try {
+                    Set-StudentTaskbarAndDesktopRegistry -HiveRoot $HiveRoot
+                }
+                catch {
+                    Write-Warning "Could not finish Student taskbar registry cleanup. $($_.Exception.Message)"
+                }
 
-            try {
-                Clear-StudentAutostartRegistry -HiveRoot $HiveRoot
-            }
-            catch {
-                Write-Warning "Could not finish Student autostart registry cleanup. $($_.Exception.Message)"
-            }
+                try {
+                    Clear-StudentAutostartRegistry -HiveRoot $HiveRoot
+                }
+                catch {
+                    Write-Warning "Could not finish Student autostart registry cleanup. $($_.Exception.Message)"
+                }
 
-            $script:StudentDesktopPaths = Get-StudentDesktopPaths `
-                -StudentProfilePath $StudentProfilePath `
-                -HiveRoot $HiveRoot
+                $script:StudentDesktopPaths = Get-StudentDesktopPaths `
+                    -StudentProfilePath $StudentProfilePath `
+                    -HiveRoot $HiveRoot `
+                    -CurrentProfilePath $CurrentProfilePath
+            }
+        }
+        catch {
+            Write-Warning "Could not load or edit the Student registry hive. Continuing with file-based desktop cleanup. $($_.Exception.Message)"
+            $HiveApplied = $false
         }
     }
-    catch {
-        Write-Warning "Could not load or edit the Student registry hive. Continuing with file-based desktop cleanup. $($_.Exception.Message)"
+    else {
+        Write-Warning "Skipping offline Student registry hive edits because Windows reported profile path $RegistryStudentProfilePath, but this run will use $StudentProfilePath."
         $HiveApplied = $false
     }
 
@@ -930,7 +1134,9 @@ try {
             throw "Student profile is not ready yet. Log in once as $StudentUser, log out, then run this script again."
         }
 
-        $script:StudentDesktopPaths = Get-StudentDesktopPaths -StudentProfilePath $StudentProfilePath
+        $script:StudentDesktopPaths = Get-StudentDesktopPaths `
+            -StudentProfilePath $StudentProfilePath `
+            -CurrentProfilePath $CurrentProfilePath
     }
 
     if ($script:StudentDesktopPaths.Count -eq 0) {
@@ -941,11 +1147,11 @@ try {
         Clear-DirectoryContents -Path $DesktopPath -Description "Student desktop"
     }
 
-    if ($SkipPublicDesktopCleanup) {
-        Write-Host "Skipping public desktop cleanup." -ForegroundColor Yellow
-    } else {
+    if ($CleanPublicDesktop -and -not $SkipPublicDesktopCleanup) {
         $PublicDesktopPath = Join-Path -Path $env:PUBLIC -ChildPath "Desktop"
         Clear-DirectoryContents -Path $PublicDesktopPath -Description "public desktop"
+    } else {
+        Write-Host "Skipping public desktop cleanup because it affects all users." -ForegroundColor Yellow
     }
 
     Install-DesktopAppShortcuts `
@@ -956,10 +1162,10 @@ try {
     Clear-StartupFolders -StudentProfilePath $StudentProfilePath
     Disable-StudentScheduledLogonTasks -StudentUser $StudentUser -StudentSid $StudentSid
 
-    if ($SkipMachineAutostartCleanup) {
-        Write-Host "Skipping machine autostart registry cleanup." -ForegroundColor Yellow
-    } else {
+    if ($CleanMachineAutostart -and -not $SkipMachineAutostartCleanup) {
         Clear-MachineAutostartRegistry
+    } else {
+        Write-Host "Skipping machine autostart registry cleanup because it affects all users." -ForegroundColor Yellow
     }
 
     if ($SkipWallpaperTask) {
