@@ -738,35 +738,6 @@ function New-DesktopShortcut {
     $Shortcut.Save()
 }
 
-function Install-StudentSystemDesktopShortcuts {
-    param(
-        [Parameter(Mandatory)]
-        [string] $DesktopPath
-    )
-
-    $ThisPcShortcutPath = Join-Path -Path $DesktopPath -ChildPath "This PC.lnk"
-    $ExplorerPath = Join-Path -Path $env:WINDIR -ChildPath "explorer.exe"
-    $ThisPcIconPath = Join-Path -Path $env:WINDIR -ChildPath "System32\imageres.dll"
-
-    try {
-        if (Test-Path -LiteralPath $ThisPcShortcutPath) {
-            Remove-Item -LiteralPath $ThisPcShortcutPath -Force -ErrorAction Stop
-        }
-
-        New-DesktopShortcut `
-            -ShortcutPath $ThisPcShortcutPath `
-            -TargetPath $ExplorerPath `
-            -Arguments "shell:MyComputerFolder" `
-            -WorkingDirectory $env:WINDIR `
-            -IconLocation "$ThisPcIconPath,109"
-
-        Write-Host "Created desktop shortcut: $ThisPcShortcutPath" -ForegroundColor Green
-    }
-    catch {
-        Write-Warning "Could not create This PC shortcut. $($_.Exception.Message)"
-    }
-}
-
 function Get-DesktopAppDefinitions {
     param(
         [Parameter(Mandatory)]
@@ -870,8 +841,6 @@ function Install-DesktopAppShortcuts {
     catch {
         throw "Could not create Student desktop directory $DesktopPath. $($_.Exception.Message)"
     }
-
-    Install-StudentSystemDesktopShortcuts -DesktopPath $DesktopPath
 
     foreach ($AppDefinition in (Get-DesktopAppDefinitions -StudentProfilePath $StudentProfilePath)) {
         try {
