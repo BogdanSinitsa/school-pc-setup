@@ -284,9 +284,18 @@ function Set-StudentTaskbarAndDesktopRegistry {
     $SearchPath = Join-Path `
         -Path $HiveRoot `
         -ChildPath "Software\Microsoft\Windows\CurrentVersion\Search"
+    $SearchSettingsPath = Join-Path `
+        -Path $HiveRoot `
+        -ChildPath "Software\Microsoft\Windows\CurrentVersion\SearchSettings"
     $ExplorerPolicyPath = Join-Path `
         -Path $HiveRoot `
         -ChildPath "Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+    $WindowsSearchPolicyPath = Join-Path `
+        -Path $HiveRoot `
+        -ChildPath "Software\Policies\Microsoft\Windows\Windows Search"
+    $WindowsExplorerPolicyPath = Join-Path `
+        -Path $HiveRoot `
+        -ChildPath "Software\Policies\Microsoft\Windows\Explorer"
     $FeedsPolicyPath = Join-Path `
         -Path $HiveRoot `
         -ChildPath "Software\Policies\Microsoft\Windows\Windows Feeds"
@@ -334,6 +343,46 @@ function Set-StudentTaskbarAndDesktopRegistry {
         -Name "SearchboxTaskbarMode" `
         -Value 2 `
         -Description "Student taskbar search"
+    Set-OptionalRegistryDWord `
+        -Path $SearchSettingsPath `
+        -Name "IsDynamicSearchBoxEnabled" `
+        -Value 0 `
+        -Description "Student search highlights"
+    Set-OptionalRegistryDWord `
+        -Path $SearchPath `
+        -Name "BingSearchEnabled" `
+        -Value 0 `
+        -Description "Student web search"
+    Set-OptionalRegistryDWord `
+        -Path $SearchPath `
+        -Name "CortanaConsent" `
+        -Value 0 `
+        -Description "Student web search"
+    Set-OptionalRegistryDWord `
+        -Path $WindowsSearchPolicyPath `
+        -Name "DisableWebSearch" `
+        -Value 1 `
+        -Description "Student web search policy"
+    Set-OptionalRegistryDWord `
+        -Path $WindowsSearchPolicyPath `
+        -Name "ConnectedSearchUseWeb" `
+        -Value 0 `
+        -Description "Student web search policy"
+    Set-OptionalRegistryDWord `
+        -Path $WindowsSearchPolicyPath `
+        -Name "ConnectedSearchUseWebOverMeteredConnections" `
+        -Value 0 `
+        -Description "Student web search policy"
+    Set-OptionalRegistryDWord `
+        -Path $WindowsSearchPolicyPath `
+        -Name "AllowSearchToUseLocation" `
+        -Value 0 `
+        -Description "Student web search policy"
+    Set-OptionalRegistryDWord `
+        -Path $WindowsExplorerPolicyPath `
+        -Name "DisableSearchBoxSuggestions" `
+        -Value 1 `
+        -Description "Student search suggestions policy"
 
     # Remove optional taskbar buttons so only search, system tray, and running apps remain.
     Set-OptionalRegistryDWord `
@@ -957,12 +1006,23 @@ function Set-RegistryDWord {
 $ExplorerAdvancedPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
 $FeedsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds"
 $SearchPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search"
+$SearchSettingsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings"
+$WindowsSearchPolicyPath = "HKCU:\Software\Policies\Microsoft\Windows\Windows Search"
+$WindowsExplorerPolicyPath = "HKCU:\Software\Policies\Microsoft\Windows\Explorer"
 $HideDesktopIconsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel"
 $ClassicHideDesktopIconsPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu"
 
 Set-RegistryDWord -Path $FeedsPath -Name "ShellFeedsTaskbarViewMode" -Value 2
 Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "TaskbarDa" -Value 0
 Set-RegistryDWord -Path $SearchPath -Name "SearchboxTaskbarMode" -Value 2
+Set-RegistryDWord -Path $SearchSettingsPath -Name "IsDynamicSearchBoxEnabled" -Value 0
+Set-RegistryDWord -Path $SearchPath -Name "BingSearchEnabled" -Value 0
+Set-RegistryDWord -Path $SearchPath -Name "CortanaConsent" -Value 0
+Set-RegistryDWord -Path $WindowsSearchPolicyPath -Name "DisableWebSearch" -Value 1
+Set-RegistryDWord -Path $WindowsSearchPolicyPath -Name "ConnectedSearchUseWeb" -Value 0
+Set-RegistryDWord -Path $WindowsSearchPolicyPath -Name "ConnectedSearchUseWebOverMeteredConnections" -Value 0
+Set-RegistryDWord -Path $WindowsSearchPolicyPath -Name "AllowSearchToUseLocation" -Value 0
+Set-RegistryDWord -Path $WindowsExplorerPolicyPath -Name "DisableSearchBoxSuggestions" -Value 1
 Set-RegistryDWord -Path $ExplorerAdvancedPath -Name "HideIcons" -Value 0
 Set-RegistryDWord `
     -Path $HideDesktopIconsPath `
