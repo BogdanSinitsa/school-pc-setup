@@ -38,11 +38,15 @@ function ConvertTo-ExpandedStudentPath {
 
 function Add-UniquePath {
     param(
-        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[string]] $Paths,
 
         [string] $Path
     )
+
+    if ($null -eq $Paths) {
+        throw "Path list was not initialized."
+    }
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         return
@@ -112,7 +116,7 @@ function Get-StudentDesktopPaths {
             -Path (Join-Path -Path $OneDriveRoot -ChildPath "Desktop")
     }
 
-    return @($Paths)
+    return @($Paths.ToArray())
 }
 
 function Clear-DirectoryContents {
@@ -732,32 +736,46 @@ function Install-DesktopAppShortcuts {
         [string] $StudentProfilePath
     )
 
-    New-Item -ItemType Directory -Path $DesktopPath -Force | Out-Null
+    try {
+        New-Item -ItemType Directory -Path $DesktopPath -Force -ErrorAction Stop | Out-Null
+    }
+    catch {
+        throw "Could not create Student desktop directory $DesktopPath. $($_.Exception.Message)"
+    }
 
     foreach ($AppDefinition in (Get-DesktopAppDefinitions -StudentProfilePath $StudentProfilePath)) {
-        $ShortcutPath = Join-Path `
-            -Path $DesktopPath `
-            -ChildPath "$($AppDefinition.ShortcutName).lnk"
-        $Launcher = Resolve-AppLauncher `
-            -AppDefinition $AppDefinition `
-            -StudentProfilePath $StudentProfilePath
+        try {
+            $ShortcutPath = Join-Path `
+                -Path $DesktopPath `
+                -ChildPath "$($AppDefinition.ShortcutName).lnk"
+            $Launcher = Resolve-AppLauncher `
+                -AppDefinition $AppDefinition `
+                -StudentProfilePath $StudentProfilePath
 
-        if (-not $Launcher) {
-            Write-Host "Skipped $($AppDefinition.ShortcutName): app not found" -ForegroundColor Yellow
-            continue
+            if (-not $Launcher) {
+                Write-Host "Skipped $($AppDefinition.ShortcutName): app not found" -ForegroundColor Yellow
+                continue
+            }
+
+            if (Test-Path -LiteralPath $ShortcutPath) {
+                Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction Stop
+            }
+
+            if ($Launcher.Kind -eq "Shortcut") {
+                Copy-Item `
+                    -LiteralPath $Launcher.Path `
+                    -Destination $ShortcutPath `
+                    -Force `
+                    -ErrorAction Stop
+            } else {
+                New-DesktopShortcut -ShortcutPath $ShortcutPath -TargetPath $Launcher.Path
+            }
+
+            Write-Host "Created desktop shortcut: $ShortcutPath" -ForegroundColor Green
         }
-
-        if (Test-Path -LiteralPath $ShortcutPath) {
-            Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction Stop
+        catch {
+            Write-Warning "Could not create shortcut for $($AppDefinition.ShortcutName). $($_.Exception.Message)"
         }
-
-        if ($Launcher.Kind -eq "Shortcut") {
-            Copy-Item -LiteralPath $Launcher.Path -Destination $ShortcutPath -Force
-        } else {
-            New-DesktopShortcut -ShortcutPath $ShortcutPath -TargetPath $Launcher.Path
-        }
-
-        Write-Host "Created desktop shortcut: $ShortcutPath" -ForegroundColor Green
     }
 }
 
